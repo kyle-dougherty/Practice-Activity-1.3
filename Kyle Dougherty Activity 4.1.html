@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>XML, HTML, and Web Scraping - Full Assignment</title>
+<style>
+body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;margin:22px;color:#111;line-height:1.5}
+h1,h2,h3{color:#1a1a1a}
+pre{background:#f8f9fa;border:1px solid #ddd;padding:10px;border-radius:6px;overflow:auto;margin-bottom:20px}
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace}
+.out{background:#fff;border:1px solid #e5e7eb;padding:10px;border-radius:6px;margin-bottom:20px}
+</style>
+</head>
+<body>
+
+<h1>XML, HTML, and Web Scraping</h1>
+<p>JSON and XML are two different ways to represent hierarchical data. Which one is better? Both formats are still widely used, but JSON is more common, so we'll focus on working with JSON representations of hierarchical data.</p>
+<p>We'll skip parsing XML directly and move to scraping HTML from webpages using <strong>Beautiful Soup</strong>.</p>
+
+<h2>Scraping an HTML table with Beautiful Soup</h2>
+<p>We'll use the table of U.S. cities by population on Wikipedia: 
+<a href="https://en.wikipedia.org/wiki/List_of_United_States_cities_by_population">Wikipedia – List of United States cities by population</a>.</p>
+
+<pre><code>import requests
+from bs4 import BeautifulSoup
+import pandas as pd
+
+url = "https://en.wikipedia.org/wiki/List_of_United_States_cities_by_population"
+resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0"})
+html = resp.text
+
+soup = BeautifulSoup(html, "lxml")
+soup.title.get_text()</code></pre>
+<div class="out"><code>List of United States cities by population - Wikipedia</code></div>
+
+<pre><code>len(soup.find_all("table"))
+len(soup.find_all("table", class_="wikitable sortable"))</code></pre>
+<div class="out"><code>10
+3</code></div>
+
+<p>Now let's find the correct table, extract the relevant columns, and build a DataFrame.</p>
+
+<pre><code>tables = soup.find_all("table")
+target = None
+for t in tables:
+    hdrs = " ".join(th.get_text(strip=True).lower() for th in t.find_all("th"))
+    if "city" in hdrs and "estimate" in hdrs and "land area" in hdrs:
+        target = t
+        break
+
+rows = []
+for tr in target.find_all("tr")[1:]:
+    cells = tr.find_all(["td", "th"])
+    if len(cells) < 7:
+        continue
+    city = cells[1].get_text(strip=True)
+    state = cells[2].get_text(strip=True)
+    pop = cells[3].get_text(strip=True)
+    land = cells[6].get_text(strip=True)
+    rows.append({"city": city, "state": state, "population_estimate": pop, "land_area_sq_mi_2020": land})
+
+df_cities = pd.DataFrame(rows, columns=["city","state","population_estimate","land_area_sq_mi_2020"])
+df_cities.shape, df_cities.head()</code></pre>
+
+<div class="out"><code>((346, 4),
+   city      state population_estimate land_area_sq_mi_2020
+0  New York    NY           8,478,072                300.5
+1  Los Angeles CA           3,878,704                469.5
+2  Chicago     IL           2,721,308                227.7
+3  Houston     TX           2,390,125                640.4
+4  Phoenix     AZ           1,673,164                518.0)
+</code></div>
+
+<h2>Aside: Scraping an HTML table with Pandas</h2>
+<p>We can also use <code>pandas.read_html</code> to scrape HTML tables automatically:</p>
+
+<pre><code>import requests, pandas as pd
+from io import StringIO
+
+url = "https://en.wikipedia.org/wiki/List_of_United_States_cities_by_population"
+html = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}).text
+tables = pd.read_html(StringIO(html), flavor="lxml")
+
+for i, t in enumerate(tables):
+    cols = [str(c).lower() for c in t.columns]
+    if any("city" in c for c in cols) and any("land area" in c for c in cols):
+        df_cities2 = t
+        print("✅ found table index:", i)
+        break
+
+df_cities2.shape, df_cities2.head()</code></pre>
+
+<div class="out"><code>✅ found table index: 2
+((346, 10),
+           City  ST 2024 estimate 2020 census  Change 2020 land area                     City  ST 2024 estimate 2020 census  Change            mi2     km2   
+0  New York[c]  NY       8478072     8804190  −3.70%          300.5   778.3   
+1  Los Angeles  CA       3878704     3898747  −0.51%          469.5  1216.0   
+2      Chicago  IL       2721308     2746388  −0.91%          227.7   589.7   
+3      Houston  TX       2390125     2304580  +3.71%          640.4  1658.6   
+4      Phoenix  AZ       1673164     1608139  +4.04%          518.0  1341.6   
+</code></div>
+
+<p>Using <code>read_html</code> is much simpler for clean tables, but it only works when data is inside <code>&lt;table&gt;</code> tags.</p>
+
+<h2>Scraping Information NOT in a Table</h2>
+<p>Now we'll scrape the <a href="http://catalog.calpoly.edu/collegesandprograms/collegeofsciencemathematics/statistics/#courseinventory">Cal Poly Statistics course catalog</a> to get course titles and terms.</p>
+
+<pre><code>import requests
+from bs4 import BeautifulSoup
+import pandas as pd
+
+url = "http://catalog.calpoly.edu/collegesandprograms/collegeofsciencemathematics/statistics/#courseinventory"
+html = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}).text
+soup2 = BeautifulSoup(html, "lxml")
+
+blocks = soup2.find_all("div", class_="courseblock")
+rows = []
+for b in blocks:
+    t = b.find("p", class_="courseblocktitle")
+    if not t:
+        continue
+    raw = t.get_text(" ", strip=True)
+    if not (raw.startswith("DATA") or raw.startswith("STAT")):
+        continue
+    s = t.find("span")
+    if s:
+        s.extract()
+    course = t.get_text(" ", strip=True)
+    term = ""
+    for p in b.find_all("p", class_="noindent"):
+        txt = p.get_text(" ", strip=True)
+        if txt.lower().startswith("term typically offered"):
+            term = txt.split(":", 1)[-1].strip()
+            break
+    rows.append({"course": course, "term_typically_offered": term})
+
+df_courses = pd.DataFrame(rows, columns=["course","term_typically_offered"])
+df_courses.shape, df_courses.head(12)</code></pre>
+
+<div class="out"><code>((74, 2),
+                                                course term_typically_offered
+0                   DATA 100. Data Science for All I.               F, W, SP
+1             DATA 301. Introduction to Data Science.               F, W, SP
+2          DATA 401. Data Science Process and Ethics.                      F
+3   DATA 402. Mathematical Foundations of Data Sci...                      F
+4         DATA 403. Data Science Projects Laboratory.                      F
+5                DATA 441. Bioinformatics Capstone I.                      W
+6               DATA 442. Bioinformatics Capstone II.                     SP
+7                  DATA 451. Data Science Capstone I.                      W
+8                 DATA 452. Data Science Capstone II.                     SP
+9                     DATA 472. Data Science Seminar.               F, W, SP
+10   STAT 130. Introduction to Statistical Reasoning.               F, W, SP
+11  STAT 150. Introduction to the Discipline of St...                      F)
+</code></div>
+
+<p><strong>Output:</strong> 74 courses, 2 columns. Each row corresponds to one DATA or STAT course and its term availability.</p>
+
+</body></html>
